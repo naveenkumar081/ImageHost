@@ -9,7 +9,7 @@ def get_s3_client() -> Any:
 
 def get_dynamodb_table() -> Any:
     dynamodb = boto3.resource('dynamodb')
-    return dynamodb.Table(os.environ.get('Table_name', 'Image_Data'))
+    return dynamodb.Table(os.environ.get('Table_name', 'ImageMetaData'))
 
 
 def put_object_in_to_bucket(bucket_name:str,

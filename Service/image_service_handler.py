@@ -93,7 +93,7 @@ class ImageServiceHandler:
         s3_key = response['Item']['s3Key']
         metadata = response['Item']
 
-        return  key_to_check_in_table, metadata, s3_key
+        return key_to_check_in_table, metadata, s3_key
 
     def get_image(self,
                   event: dict[str, Any]) -> dict[str, Any]:
@@ -113,7 +113,7 @@ class ImageServiceHandler:
             })
         except Exception as e:
             logger.error(f"Error retrieving image: {str(e)}")
-            return utils.create_response(500,  {}, message='Internal server error')
+            return utils.create_response(500, {}, message='Internal server error')
 
     def list_images(self,
                     event: dict[str, Any],
@@ -121,8 +121,16 @@ class ImageServiceHandler:
         """Listing the images """
         try:
             user_id = event['requestContext']['authorizer']['claims']['sub']
+            query_params = event.get('queryStringParameters', {}) or {}
             filter_expressions = ['userId = :userId']
             expression_values = {':userId': user_id}
+            if 'title' in query_params:
+                filter_expressions.append('contains(title, :title)')
+                expression_values[':title'] = query_params['title']
+
+            if 'tag' in query_params:
+                filter_expressions.append('contains(tags, :tag)')
+                expression_values[':tag'] = query_params['tag']
             response = aws_client_adapter.scan_items_from_table(' AND '.join(filter_expressions),
                                                                 expression_values)
 
@@ -133,7 +141,7 @@ class ImageServiceHandler:
 
         except Exception as e:
             logger.error(f"Error listing images: {str(e)}")
-            return utils.create_response(500, body= {},
+            return utils.create_response(500, body={},
                                          message='Internal server error')
 
     def delete_image(self,
@@ -156,7 +164,7 @@ class ImageServiceHandler:
 
         except Exception as e:
             logger.error(f"Error deleting image: {str(e)}")
-            return utils.create_response(500,  {}, message='Internal server error')
+            return utils.create_response(500, {}, message='Internal server error')
 
 
 def lambda_handler(event: dict[str, Any],
