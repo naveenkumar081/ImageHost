@@ -54,13 +54,9 @@ class ImageServiceHandler:
                 'userId': user_id,
                 'fileName': f"{image_id}.bin",
                 'contentType': content_type,
-                'size': int(str(len(body))),
-                'uploadDate': datetime.now().isoformat(),
                 's3Key': s3_key,
                 'status': 'active',
-                'title': metadata['title'],
-                'description': metadata['description'],
-                'tags': metadata.get('tags', []),
+                'description': metadata['description']
             }
 
             aws_client_adapter.put_item_in_to_dynamo_table(item)
@@ -77,6 +73,36 @@ class ImageServiceHandler:
             logger.error(f"Unexpected error: {str(e)}")
             return utils.create_response(500, {}, message="Internal Server Error...")
 
+    def get_image(self,
+                  event: dict[str, Any]) -> dict[str, Any]:
+        """Get image details and generate download URL"""
+        try:
+            image_id = event['pathParameters']['imageId']
+            user_id = event['requestContext']['authorizer']['claims']['sub']
+            key_to_check_in_table = {'imageId': image_id,
+                                     'userId': user_id}
+            response = aws_client_adapter.get_item_from_table(key_to_check_in_table)
+
+            if 'Item' not in response:
+                raise ImageServiceError("Image not found", 404)
+
+            metadata = response['Item']
+            s3_key = metadata['s3Key']
+
+            presigned_url = aws_client_adapter.generate_presigned_url_for_object(
+                BUCKET_NAME,
+                s3_key
+            )
+
+            return utils.create_response(200, {
+                'imageId': image_id,
+                'downloadUrl': presigned_url,
+                'metadata': metadata
+            })
+        except Exception as e:
+            logger.error(f"Error retrieving image: {str(e)}")
+            return utils.create_response(500,  {}, message='Internal server error')
+
     def delete_image(self,
                      event: dict[str, Any],
                      /) -> dict[str, Any]:
@@ -88,7 +114,6 @@ class ImageServiceHandler:
             key_to_check_in_table = {'imageId': image_id,
                                      'userId': user_id}
 
-            # Get image metadata
             response = aws_client_adapter.get_item_from_table(
                 key_to_check_in_table
             )
@@ -100,7 +125,6 @@ class ImageServiceHandler:
 
             aws_client_adapter.delete_object_from_bucket(BUCKET_NAME, s3_key)
 
-            # Delete from DynamoDB
             aws_client_adapter.delete_an_item_from_table(
                 key_to_check_in_table
             )
@@ -110,17 +134,15 @@ class ImageServiceHandler:
                 'imageId': image_id
             })
 
-        except ImageServiceError as e:
-            return utils.create_response(e.status_code, {'error': str(e)})
         except Exception as e:
             logger.error(f"Error deleting image: {str(e)}")
-            return utils.create_response(500, {'error': 'Internal server error'})
+            return utils.create_response(500,  {}, message='Internal server error')
 
 
 def lambda_handler(event: dict[str, Any],
                    context: Any,
                    /) -> dict[str, Any]:
-    """Main Lambda handler"""
+    """Main Lambda handler which takes care of the api actions"""
     logger.info(f"Received event: {json.dumps(event)}")
 
     service = ImageServiceHandler()
@@ -132,8 +154,10 @@ def lambda_handler(event: dict[str, Any],
             return service.upload_image(event)
         elif http_method == 'DELETE' and resource == '/images':
             return service.delete_image(event)
+        elif http_method == 'GET' and resource == '/images/{imageId}':
+            return service.delete_image(event)
         else:
-            return utils.create_response(405, {'error': 'Method not allowed'})
+            return utils.create_response(405, {}, message="Method not allowed")
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
         return utils.create_response(500, {'error': 'Internal server error'})

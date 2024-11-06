@@ -1,6 +1,7 @@
 import os
 import boto3
 from typing import Any
+from common.definitions import AWSUtils
 
 def get_s3_client() -> Any:
     return boto3.client('s3')
@@ -28,10 +29,25 @@ def put_object_in_to_bucket(bucket_name:str,
     )
 
 def delete_object_from_bucket(bucket_name:str,
-                              s3_key: str) -> None:
+                              s3_key: str,
+                              /) -> None:
     s3_client = get_s3_client()
     s3_client.delete_object(Bucket=bucket_name, Key=s3_key)
     return None
+
+def generate_presigned_url_for_object(bucket_name:str,
+                              s3_key: str,
+                                      /,
+                                      *,
+                                      action_name: str = "get_object") -> str:
+    s3_client = get_s3_client()
+
+    return  s3_client.generate_presigned_url(
+        action_name,
+        Params={'Bucket': bucket_name, 'Key': s3_key},
+        ExpiresIn=AWSUtils.s3_presigned_url_timeout
+    )
+
 
 def put_item_in_to_dynamo_table(item: dict[str, Any],
                                 /) -> None:
