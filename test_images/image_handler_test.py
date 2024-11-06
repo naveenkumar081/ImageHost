@@ -1,10 +1,9 @@
 # test_image_service.py
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 import json
 import base64
-from Service.image_service_handler import lambda_handler
-from Service.image_service_handler import ImageServiceHandler
+from image_service_handler import ImageServiceHandler
 
 
 class TestImageService(unittest.TestCase):
