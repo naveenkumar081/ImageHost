@@ -4,11 +4,11 @@ from typing import Any
 from common.definitions import AWSUtils
 
 def get_s3_client() -> Any:
-    return boto3.client('s3')
+    return boto3.client('s3', endpoint_url=AWSUtils.ENDPOINT_URL)
 
 
 def get_dynamodb_table() -> Any:
-    dynamodb = boto3.resource('dynamodb')
+    dynamodb = boto3.resource('dynamodb', endpoint_url=AWSUtils.ENDPOINT_URL)
     return dynamodb.Table(os.environ.get('Table_name', 'ImageMetaData'))
 
 

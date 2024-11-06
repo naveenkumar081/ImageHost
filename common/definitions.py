@@ -5,6 +5,7 @@ class ImageRequirements:
 
 class AWSUtils:
     s3_presigned_url_timeout  = 3600
+    ENDPOINT_URL = "http://localhost.localstack.cloud:4566"
 
 
 class ResponseHeaders:
