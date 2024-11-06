@@ -5,10 +5,11 @@ import uuid
 import sys
 
 from typing import Any
+import mimetypes
+
 from base64 import b64decode
 
 import boto3
-
 
 possible_top_dir = os.path.normpath(os.path.join(os.path.abspath(sys.argv[0]),
                                                  os.pardir,
@@ -85,7 +86,7 @@ class AWSActions:
     def delete_an_item_from_table(item: dict[str, Any],
                                   /) -> None:
         table_obj = AWSActions.get_dynamodb_table()
-        table_obj.delete_item(Item=item)
+        table_obj.delete_item(Key=item)
         return None
 
     @staticmethod
@@ -104,7 +105,7 @@ class ImageRequirements:
 
 
 class AWSUtils:
-    s3_presigned_url_timeout  = 3600
+    s3_presigned_url_timeout = 3600
     ENDPOINT_URL = "http://localhost.localstack.cloud:4566"
 
 
@@ -116,9 +117,9 @@ class ResponseHeaders:
     message = "Action performed Successfully"
 
 
-
 class ImageServiceError(Exception):
     """Custom exception for image service errors"""
+
     def __init__(self, message: str, status_code: int = 400):
         super().__init__(message)
         self.status_code = status_code
@@ -155,15 +156,15 @@ class Utils:
                         body: dict[str, Any],
                         /,
                         *,
-                        message: str = None
+                        base_64_encoded: bool = False
                         ) -> dict[str, Any]:
 
         """Creating the response structure for the apis"""
         return {
-            'status_code': status_code,
+            'statusCode': status_code,
             'headers': ResponseHeaders.headers,
             'body': json.dumps(body, default=str),
-            "message": message or ResponseHeaders.message
+            "isBase64Encoded": base_64_encoded
 
         }
 
@@ -192,25 +193,27 @@ class ImageServiceHandler:
             if event.get('isBase64Encoded', False):
                 body = b64decode(body)
 
-            content_type = event['headers'].get('content-type', '')
-            user_id = event['requestContext']['authorizer']['claims']['sub']
-            metadata = Utils.process_metadata(event['headers'].get('x-image-metadata', '{}'))
+            body = json.loads(body)
 
+            content_type = body.get('headers', {}).get('content-type', '')
+            user_id = event.get('requestContext', {}).get('authorizer', {}).get('claims', {}).get('sub',
+                                                                                                 'default-user-id')
+            metadata = Utils.process_metadata(body.get('headers', {}).get('x-image-metadata', '{}'))
             image_id = str(uuid.uuid4())
-            s3_key = f"images/{user_id}/{image_id}.bin"
-
+            file_extension = mimetypes.guess_extension(content_type) or '.bin'
+            s3_key = f"images/{user_id}/{image_id}{file_extension}"
             Utils.validate_image(content_type, len(body))
 
             AWSActions.put_object_in_to_bucket(BUCKET_NAME,
-                                                       s3_key,
-                                                       body,
-                                                       user_id,
-                                                       content_type)
+                                               s3_key,
+                                               body.get('body'),
+                                               user_id,
+                                               content_type)
 
             item = {
                 'imageId': image_id,
                 'userId': user_id,
-                'fileName': f"{image_id}.bin",
+                'fileName': f"{image_id}{file_extension}",
                 'contentType': content_type,
                 's3Key': s3_key,
                 'status': 'active',
@@ -226,17 +229,16 @@ class ImageServiceHandler:
 
         except ImageServiceError as e:
             logger.error(f"Validation error: {str(e)}")
-            return Utils.create_response(e.status_code, {}, message=str(e))
+            return Utils.create_response(e.status_code, {"message": str(e)})
         except Exception as e:
             logger.error(f"Unexpected error: {str(e)}")
-            return Utils.create_response(500, {}, message="Internal Server Error...")
+            return Utils.create_response(500, {"message": f"Internal Server Error::{str(e)}"})
 
     def fetch_s3_key_from_event_dict(self,
                                      event: dict[str, Any],
                                      /):
         image_id = event['pathParameters']['imageId']
-        user_id = event['requestContext']['authorizer']['claims']['sub']
-
+        user_id = event.get('requestContext', {}).get('authorizer', {}).get('claims', {}).get('sub', 'default-user-id')
         key_to_check_in_table = {'imageId': image_id,
                                  'userId': user_id}
 
@@ -270,14 +272,16 @@ class ImageServiceHandler:
             })
         except Exception as e:
             logger.error(f"Error retrieving image: {str(e)}")
-            return Utils.create_response(500, {}, message='Internal server error')
+            return Utils.create_response(500, {"message": f'Internal server error::{str(e)}'})
 
     def list_images(self,
                     event: dict[str, Any],
                     /) -> dict[str, Any]:
         """Listing the images """
         try:
-            user_id = event['requestContext']['authorizer']['claims']['sub']
+            user_id = event.get('requestContext', {}).get('authorizer', {}).get('claims', {}).get('sub',
+                                                                                                  'default-user-id')
+
             query_params = event.get('queryStringParameters', {}) or {}
             filter_expressions = ['userId = :userId']
             expression_values = {':userId': user_id}
@@ -289,17 +293,19 @@ class ImageServiceHandler:
                 filter_expressions.append('contains(tags, :tag)')
                 expression_values[':tag'] = query_params['tag']
             response = AWSActions.scan_items_from_table(' AND '.join(filter_expressions),
-                                                                expression_values)
+                                                        expression_values)
 
             return Utils.create_response(200, {
                 'images': response['Items'],
                 'count': len(response['Items'])
             })
 
+
         except Exception as e:
             logger.error(f"Error listing images: {str(e)}")
-            return Utils.create_response(500, {},
-                                         message='Internal server error')
+            return Utils.create_response(500, {
+                "message": f"Internal server error::{str(e)}"
+            })
 
     def delete_image(self,
                      event: dict[str, Any],
@@ -309,7 +315,6 @@ class ImageServiceHandler:
             key_to_check_in_table, metadata, s3_key = self.fetch_s3_key_from_event_dict(event)
             image_id = event['pathParameters']['imageId']
             AWSActions.delete_object_from_bucket(BUCKET_NAME, s3_key)
-
             AWSActions.delete_an_item_from_table(
                 key_to_check_in_table
             )
@@ -321,7 +326,7 @@ class ImageServiceHandler:
 
         except Exception as e:
             logger.error(f"Error deleting image: {str(e)}")
-            return Utils.create_response(500, {}, message='Internal server error')
+            return Utils.create_response(500, {"message": f"Internal server error::{str(e)}"})
 
 
 def lambda_handler(event: dict[str, Any],
@@ -337,12 +342,14 @@ def lambda_handler(event: dict[str, Any],
     try:
         if http_method == 'POST' and resource == '/images':
             return service.upload_image(event)
-        elif http_method == 'DELETE' and resource == '/images':
+        elif http_method == 'DELETE' and resource == '/images/{imageId}':
             return service.delete_image(event)
+        elif http_method == 'GET' and resource == '/images':
+            return service.list_images(event)
         elif http_method == 'GET' and resource == '/images/{imageId}':
-            return service.delete_image(event)
+            return service.get_image(event)
         else:
-            return Utils.create_response(405, {}, message="Method not allowed")
+            return Utils.create_response(405, {"message": "Method Not Allowed"})
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
-        return Utils.create_response(500, {'error': 'Internal server error'})
+        return Utils.create_response(500, {'error': f'Internal server error::{str(e)}'})
