@@ -67,3 +67,11 @@ def delete_an_item_from_table(item: dict[str, Any],
     table_obj = get_dynamodb_table()
     table_obj.delete_item(Item=item)
     return None
+
+def scan_items_from_table(filter_expressions: str,
+                          values: dict[str, Any],
+                        /) -> dict[str, Any]:
+    table_obj = get_dynamodb_table()
+    data_to_retrive = table_obj.scan(FilterExpression=filter_expressions,
+                                     ExpressionAttributeValues=values)
+    return data_to_retrive

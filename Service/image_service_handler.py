@@ -2,13 +2,14 @@ import json
 import logging
 import os
 import uuid
+from http.client import responses
+from importlib.metadata import metadata
 from typing import Any
 
 from base64 import b64decode
 from common.exception_handler import ImageServiceError
 from common import utils
 from common import aws_client_adapter
-from datetime import datetime
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -73,22 +74,33 @@ class ImageServiceHandler:
             logger.error(f"Unexpected error: {str(e)}")
             return utils.create_response(500, {}, message="Internal Server Error...")
 
+    def fetch_s3_key_from_event_dict(self,
+                                     event: dict[str, Any],
+                                     /):
+        image_id = event['pathParameters']['imageId']
+        user_id = event['requestContext']['authorizer']['claims']['sub']
+
+        key_to_check_in_table = {'imageId': image_id,
+                                 'userId': user_id}
+
+        response = aws_client_adapter.get_item_from_table(
+            key_to_check_in_table
+        )
+
+        if 'Item' not in response:
+            raise ImageServiceError("Image not found", 404)
+
+        s3_key = response['Item']['s3Key']
+        metadata = response['Item']
+
+        return  key_to_check_in_table, metadata, s3_key
+
     def get_image(self,
                   event: dict[str, Any]) -> dict[str, Any]:
         """Get image details and generate download URL"""
         try:
+            key_to_check_in_table, metadata, s3_key = self.fetch_s3_key_from_event_dict(event)
             image_id = event['pathParameters']['imageId']
-            user_id = event['requestContext']['authorizer']['claims']['sub']
-            key_to_check_in_table = {'imageId': image_id,
-                                     'userId': user_id}
-            response = aws_client_adapter.get_item_from_table(key_to_check_in_table)
-
-            if 'Item' not in response:
-                raise ImageServiceError("Image not found", 404)
-
-            metadata = response['Item']
-            s3_key = metadata['s3Key']
-
             presigned_url = aws_client_adapter.generate_presigned_url_for_object(
                 BUCKET_NAME,
                 s3_key
@@ -103,26 +115,34 @@ class ImageServiceHandler:
             logger.error(f"Error retrieving image: {str(e)}")
             return utils.create_response(500,  {}, message='Internal server error')
 
+    def list_images(self,
+                    event: dict[str, Any],
+                    /) -> dict[str, Any]:
+        """Listing the images """
+        try:
+            user_id = event['requestContext']['authorizer']['claims']['sub']
+            filter_expressions = ['userId = :userId']
+            expression_values = {':userId': user_id}
+            response = aws_client_adapter.scan_items_from_table(' AND '.join(filter_expressions),
+                                                                expression_values)
+
+            return utils.create_response(200, {
+                'images': response['Items'],
+                'count': len(response['Items'])
+            })
+
+        except Exception as e:
+            logger.error(f"Error listing images: {str(e)}")
+            return utils.create_response(500, body= {},
+                                         message='Internal server error')
+
     def delete_image(self,
                      event: dict[str, Any],
                      /) -> dict[str, Any]:
         """delete the image from the table and the bucket"""
         try:
+            key_to_check_in_table, metadata, s3_key = self.fetch_s3_key_from_event_dict(event)
             image_id = event['pathParameters']['imageId']
-            user_id = event['requestContext']['authorizer']['claims']['sub']
-
-            key_to_check_in_table = {'imageId': image_id,
-                                     'userId': user_id}
-
-            response = aws_client_adapter.get_item_from_table(
-                key_to_check_in_table
-            )
-
-            if 'Item' not in response:
-                raise ImageServiceError("Image not found", 404)
-
-            s3_key = response['Item']['s3Key']
-
             aws_client_adapter.delete_object_from_bucket(BUCKET_NAME, s3_key)
 
             aws_client_adapter.delete_an_item_from_table(
